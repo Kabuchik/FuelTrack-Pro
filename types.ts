@@ -1,5 +1,12 @@
-
 export type Role = 'admin' | 'user';
+
+export interface UserPermissions {
+  canSeeCost: boolean;
+  canManageUsers: boolean;
+  canManageTransactions: boolean;
+  canManageClients: boolean;
+  canExport: boolean;
+}
 
 export interface AuthUser {
   id: string;
@@ -7,6 +14,7 @@ export interface AuthUser {
   email: string;
   photoUrl?: string;
   role: Role;
+  permissions: UserPermissions;
 }
 
 export interface Client {
