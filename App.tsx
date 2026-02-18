@@ -32,7 +32,12 @@ import {
   Lock,
   Eye,
   EyeOff,
-  Key
+  Key,
+  RotateCcw,
+  Database,
+  Save,
+  UploadCloud,
+  ArrowRight
 } from 'lucide-react';
 import { ViewType, Client, FuelTransaction, AuthUser, Role, UserPermissions } from './types';
 import * as XLSX from 'xlsx';
@@ -49,6 +54,7 @@ const translations = {
     transactions: 'Transactions',
     settings: 'Settings',
     userManagement: 'User Management',
+    dataManagement: 'Data Management',
     search: 'Search anything...',
     importClients: 'Import Clients',
     importFuel: 'Import Fuel',
@@ -143,6 +149,14 @@ const translations = {
     duplicateIdError: 'Error: This Client ID is already in use.',
     duplicateCardError: 'Error: Card "{card}" is already linked to client "{account}".',
     duplicateInternalCardError: 'Error: You have entered duplicate card numbers in the list: "{card}".',
+    resetSystem: 'Reset System Data',
+    exportBackup: 'Export System Backup',
+    importBackup: 'Restore from Backup',
+    backupHint: 'Save your entire database as a file for permanent safety.',
+    restoreConfirm: 'Warning: This will replace all current data. Proceed?',
+    restoreSuccess: 'System restored successfully!',
+    languagePref: 'Language Preference',
+    systemConfig: 'System Configuration'
   },
   uk: {
     overview: 'Огляд',
@@ -150,6 +164,7 @@ const translations = {
     transactions: 'Транзакції',
     settings: 'Налаштування',
     userManagement: 'Користувачі',
+    dataManagement: 'Керування даними',
     search: 'Пошук...',
     importClients: 'Імпорт клієнтів',
     importFuel: 'Імпорт пального',
@@ -244,7 +259,51 @@ const translations = {
     duplicateIdError: 'Помилка: Цей ID клієнта вже використовується.',
     duplicateCardError: 'Помилка: Картка "{card}" вже закріплена за клієнтом "{account}".',
     duplicateInternalCardError: 'Помилка: Ви ввели дубльовані номери карток у списку: "{card}".',
+    resetSystem: 'Скинути дані системи',
+    exportBackup: 'Експорт резервної копії',
+    importBackup: 'Відновити з копії',
+    backupHint: 'Збережіть усю базу даних у файл для надійності.',
+    restoreConfirm: 'Увага: Це замінить усі поточні дані. Продовжити?',
+    restoreSuccess: 'Систему відновлено успішно!',
+    languagePref: 'Налаштування мови',
+    systemConfig: 'Конфігурація системи'
   }
+};
+
+const INITIAL_ADMIN: AuthUser = {
+  id: 'primary-admin',
+  name: 'Andriy Pelypenko',
+  email: 'andriy.pelypenko@gmail.com',
+  password: 'qazQAZ123!@#',
+  role: 'admin',
+  photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=Andriy`,
+  permissions: {
+    canSeeCost: true,
+    canManageUsers: true,
+    canManageTransactions: true,
+    canManageClients: true,
+    canExport: true
+  }
+};
+
+const parseNumeric = (val: any): number => {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const clean = String(val).replace(/[^\d.,-]/g, '').replace(',', '.');
+  const num = parseFloat(clean);
+  return isNaN(num) ? 0 : num;
+};
+
+const findValue = (row: any, aliases: string[]): any => {
+  const keys = Object.keys(row);
+  for (const alias of aliases) {
+    const target = alias.toLowerCase().replace(/\s/g, '');
+    const foundKey = keys.find(k => k.toLowerCase().replace(/\s/g, '') === target);
+    if (foundKey !== undefined) {
+      return row[foundKey];
+    }
+  }
+  return undefined;
 };
 
 const App: React.FC = () => {
@@ -255,22 +314,58 @@ const App: React.FC = () => {
 
   const t = translations[lang];
 
-  useEffect(() => {
-    localStorage.setItem('fueltrack_lang', lang);
-  }, [lang]);
+  // ROBUST STATE INITIALIZATION FROM LOCALSTORAGE
+  const [clients, setClients] = useState<Client[]>(() => {
+    const saved = localStorage.getItem('fueltrack_clients');
+    return saved ? JSON.parse(saved) : [];
+  });
 
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [authorizedUsers, setAuthorizedUsers] = useState<AuthUser[]>([]);
+  const [transactions, setTransactions] = useState<FuelTransaction[]>(() => {
+    const saved = localStorage.getItem('fueltrack_tx');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [authorizedUsers, setAuthorizedUsers] = useState<AuthUser[]>(() => {
+    const saved = localStorage.getItem('fueltrack_auth_users');
+    let list: AuthUser[] = saved ? JSON.parse(saved) : [];
+    // Always ensure primary admin exists and is up to date
+    const adminIdx = list.findIndex(u => u.email.toLowerCase() === INITIAL_ADMIN.email.toLowerCase());
+    if (adminIdx === -1) {
+      list = [INITIAL_ADMIN, ...list];
+    } else {
+      list[adminIdx] = { ...INITIAL_ADMIN, ...list[adminIdx], password: INITIAL_ADMIN.password, role: 'admin' };
+    }
+    return list;
+  });
+
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const saved = localStorage.getItem('fueltrack_user');
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    // Re-verify against live users list
+    const savedUsers = localStorage.getItem('fueltrack_auth_users');
+    const usersList: AuthUser[] = savedUsers ? JSON.parse(savedUsers) : [INITIAL_ADMIN];
+    return usersList.find(u => u.email.toLowerCase() === parsed.email.toLowerCase()) || null;
+  });
+
+  // SAVING EFFECTS
+  useEffect(() => localStorage.setItem('fueltrack_lang', lang), [lang]);
+  useEffect(() => localStorage.setItem('fueltrack_clients', JSON.stringify(clients)), [clients]);
+  useEffect(() => localStorage.setItem('fueltrack_tx', JSON.stringify(transactions)), [transactions]);
+  useEffect(() => localStorage.setItem('fueltrack_auth_users', JSON.stringify(authorizedUsers)), [authorizedUsers]);
+  useEffect(() => {
+    if (user) localStorage.setItem('fueltrack_user', JSON.stringify(user));
+    else localStorage.removeItem('fueltrack_user');
+  }, [user]);
+
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [loginFailedCount, setLoginFailedCount] = useState(0);
 
   const [activeView, setActiveView] = useState<ViewType>('dashboard');
-  const [clients, setClients] = useState<Client[]>([]);
-  const [transactions, setTransactions] = useState<FuelTransaction[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   
@@ -290,54 +385,7 @@ const App: React.FC = () => {
 
   const clientFileRef = useRef<HTMLInputElement>(null);
   const fuelFileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const savedUser = localStorage.getItem('fueltrack_user');
-    const savedClients = localStorage.getItem('fueltrack_clients');
-    const savedTx = localStorage.getItem('fueltrack_tx');
-    const savedAuthUsers = localStorage.getItem('fueltrack_auth_users');
-    
-    if (savedClients) setClients(JSON.parse(savedClients));
-    if (savedTx) setTransactions(JSON.parse(savedTx));
-    
-    if (savedAuthUsers) {
-      setAuthorizedUsers(JSON.parse(savedAuthUsers));
-    } else {
-      const initialAdmin: AuthUser = {
-        id: 'primary-admin',
-        name: 'Andriy Pelypenko',
-        email: 'andriy.pelypenko@gmail.com',
-        password: 'qazQAZ123!@#',
-        role: 'admin',
-        photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=Andriy`,
-        permissions: {
-          canSeeCost: true,
-          canManageUsers: true,
-          canManageTransactions: true,
-          canManageClients: true,
-          canExport: true
-        }
-      };
-      setAuthorizedUsers([initialAdmin]);
-    }
-
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (user) {
-      const currentLatest = authorizedUsers.find(u => u.id === user.id);
-      if (currentLatest) {
-        localStorage.setItem('fueltrack_user', JSON.stringify(currentLatest));
-      } else {
-        handleLogout();
-      }
-    } else {
-      localStorage.removeItem('fueltrack_user');
-    }
-  }, [user, authorizedUsers]);
+  const backupFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (editingTransaction) {
@@ -347,14 +395,96 @@ const App: React.FC = () => {
     }
   }, [editingTransaction, isAddingTransaction, clients]);
 
-  useEffect(() => localStorage.setItem('fueltrack_clients', JSON.stringify(clients)), [clients]);
-  useEffect(() => localStorage.setItem('fueltrack_tx', JSON.stringify(transactions)), [transactions]);
-  useEffect(() => localStorage.setItem('fueltrack_auth_users', JSON.stringify(authorizedUsers)), [authorizedUsers]);
-
   const hasPermission = (key: keyof UserPermissions) => {
     if (!user) return false;
     if (user.role === 'admin') return true;
     return !!user.permissions[key];
+  };
+
+  const handleExportBackup = () => {
+    const fullState = {
+      clients,
+      transactions,
+      authorizedUsers,
+      exportDate: new Date().toISOString(),
+      version: '2.6'
+    };
+    const blob = new Blob([JSON.stringify(fullState, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `FuelTrack_Full_Backup_${format(new Date(), 'yyyy-MM-dd_HHmm')}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setShowToast("Backup exported.");
+    setTimeout(() => setShowToast(null), 3000);
+  };
+
+  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const data = JSON.parse(content);
+        
+        if (!data.clients || !data.transactions) {
+          throw new Error("Invalid backup format.");
+        }
+
+        if (confirm(t.restoreConfirm)) {
+          setClients(data.clients);
+          setTransactions(data.transactions);
+          if (data.authorizedUsers) setAuthorizedUsers(data.authorizedUsers);
+          setShowToast(t.restoreSuccess);
+          setTimeout(() => setShowToast(null), 3000);
+        }
+      } catch (err) {
+        alert("Import failed: " + (err instanceof Error ? err.message : "Invalid JSON"));
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleResetSystem = () => {
+    if (confirm("This will clear ALL clients, transactions, and additional users. Only the primary admin will remain. Continue?")) {
+      localStorage.clear();
+      window.location.reload();
+    }
+  };
+
+  const handleGoogleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    
+    setTimeout(() => {
+      const cleanEmail = loginEmail.trim().toLowerCase();
+      const cleanPass = loginPassword.trim();
+
+      const match = authorizedUsers.find(u => 
+        u.email.toLowerCase() === cleanEmail && 
+        u.password === cleanPass
+      );
+
+      if (match) {
+        setUser(match);
+        setLoginFailedCount(0);
+        setShowToast(`${t.welcome}, ${match.name}`);
+        setTimeout(() => setShowToast(null), 3000);
+      } else {
+        setLoginFailedCount(prev => prev + 1);
+        alert(t.invalidLogin);
+      }
+      setIsLoggingIn(false);
+    }, 400);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setLoginPassword('');
   };
 
   const canManageUsers = hasPermission('canManageUsers');
@@ -363,39 +493,14 @@ const App: React.FC = () => {
   const canManageClients = hasPermission('canManageClients');
   const canExport = hasPermission('canExport');
 
-  const handleGoogleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoggingIn(true);
-    setTimeout(() => {
-      const match = authorizedUsers.find(u => 
-        u.email.toLowerCase() === loginEmail.toLowerCase() && 
-        u.password === loginPassword
-      );
-      if (match) {
-        setUser(match);
-        setShowToast(`${t.welcome}, ${match.name}`);
-        setTimeout(() => setShowToast(null), 3000);
-      } else {
-        alert(t.invalidLogin);
-      }
-      setIsLoggingIn(false);
-    }, 800);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setLoginPassword('');
-    localStorage.removeItem('fueltrack_user');
-  };
-
   const handleSaveUser = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canManageUsers) return;
     const formData = new FormData(e.currentTarget);
     const role = formData.get('role') as Role;
     const name = formData.get('name') as string;
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
+    const email = (formData.get('email') as string).trim().toLowerCase();
+    const password = (formData.get('password') as string).trim();
 
     const perms: UserPermissions = {
       canSeeCost: formData.get('canSeeCost') === 'on',
@@ -435,18 +540,16 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!canManageClients) return;
     const formData = new FormData(e.currentTarget);
-    const uniqueId = formData.get('uniqueId') as string;
+    const uniqueId = (formData.get('uniqueId') as string).trim();
     const cardsInput = formData.get('cards') as string;
     const newCards = cardsInput.split(',').map(c => c.trim()).filter(c => c);
 
-    // 1. Validation for unique Client ID (Internal Ref)
     const duplicateIdClient = clients.find(c => c.uniqueId === uniqueId && c.id !== editingClient?.id);
     if (duplicateIdClient) {
       setClientError(t.duplicateIdError);
       return;
     }
 
-    // 2. Validation for unique Asset Cards within the SAME account
     const uniqueEnteredCards = new Set<string>();
     for (const card of newCards) {
       if (uniqueEnteredCards.has(card)) {
@@ -456,7 +559,6 @@ const App: React.FC = () => {
       uniqueEnteredCards.add(card);
     }
 
-    // 3. Validation for unique Asset Cards across OTHER accounts
     for (const card of newCards) {
       const conflictingClient = clients.find(c => c.id !== editingClient?.id && c.fuelCardNumbers.includes(card));
       if (conflictingClient) {
@@ -469,7 +571,7 @@ const App: React.FC = () => {
       id: editingClient?.id || crypto.randomUUID(),
       uniqueId: uniqueId,
       name: formData.get('name') as string,
-      email: formData.get('email') as string,
+      email: (formData.get('email') as string).trim(),
       fuelCardNumbers: newCards,
       marginPerLiter: parseFloat(formData.get('margin') as string || '0'),
     };
@@ -501,14 +603,14 @@ const App: React.FC = () => {
         const data = XLSX.utils.sheet_to_json(ws) as any[];
 
         const newClients: Client[] = data.map(row => {
-          const cardsStr = String(row.Cards || row.fuelCardNumbers || row.cards || row['Fuel Cards'] || '');
+          const cardsStr = String(findValue(row, ['Cards', 'fuelCardNumbers', 'fuelCards', 'Cards List']) || '');
           return {
             id: crypto.randomUUID(),
-            uniqueId: String(row.ID || row.uniqueId || row['Unique ID'] || ''),
-            name: String(row.Name || row.name || row['Client Name'] || ''),
-            email: String(row.Email || row.email || ''),
+            uniqueId: String(findValue(row, ['ID', 'uniqueId', 'Internal ID', 'Code']) || '').trim(),
+            name: String(findValue(row, ['Name', 'Client Name', 'Account']) || '').trim(),
+            email: String(findValue(row, ['Email', 'Primary Email']) || '').trim(),
             fuelCardNumbers: cardsStr.split(',').map((c: string) => c.trim()).filter(c => c),
-            marginPerLiter: parseFloat(row.Margin || row.margin || row['Margin Per Liter'] || '0'),
+            marginPerLiter: parseNumeric(findValue(row, ['Margin', 'marginPerLiter', 'Markup'])),
           };
         });
 
@@ -537,19 +639,28 @@ const App: React.FC = () => {
         const data = XLSX.utils.sheet_to_json(ws) as any[];
 
         const newTx: FuelTransaction[] = data.map(row => {
-          const card = String(row.Card || row.fuelCardNumber || row.card || row['Asset Card'] || '');
+          const card = String(findValue(row, ['Card', 'fuelCardNumber', 'Asset Card', 'Card Number']) || '').trim();
           const matchedClient = clients.find(c => c.fuelCardNumbers.includes(card));
+          
+          const costVal = findValue(row, ['Cost', 'Cost Per Liter', 'Price', 'Price/L', 'Rate', 'Purchase Cost', 'Unit Cost', 'Ціна', 'Вартість', 'Закупівля', 'Закуп']);
+          const literVal = findValue(row, ['Liters', 'Volume', 'Quantity', 'Qty', 'Amount', 'Літри', 'Кількість']);
+          const dateVal = findValue(row, ['Date', 'Transaction Date', 'Date Of Purchase', 'Дата']);
+          const timeVal = findValue(row, ['Time', 'Transaction Time', 'Час']);
+          const fuelTypeVal = findValue(row, ['FuelType', 'Type', 'Fuel Grade', 'Grade', 'Вид']);
+          const stationVal = findValue(row, ['Station', 'Station Name', 'Merchant', 'Vendor', 'АЗС', 'Станція']);
+          const addressVal = findValue(row, ['Address', 'Station Address', 'Location', 'Адреса']);
+
           return {
             id: crypto.randomUUID(),
             clientId: matchedClient?.id || 'unassigned',
             fuelCardNumber: card,
-            date: String(row.Date || row.date || format(new Date(), 'yyyy-MM-dd')),
-            time: String(row.Time || row.time || '12:00'),
-            fuelType: String(row.FuelType || row.fuelType || row['Fuel Type'] || 'Diesel'),
-            stationName: String(row.Station || row.stationName || row['Station Name'] || 'Unknown'),
-            stationAddress: String(row.Address || row.stationAddress || row['Station Address'] || ''),
-            liters: parseFloat(row.Liters || row.liters || '0'),
-            costPerLiter: parseFloat(row.Cost || row.costPerLiter || row['Cost Per Liter'] || '0'),
+            date: String(dateVal || format(new Date(), 'yyyy-MM-dd')),
+            time: String(timeVal || '12:00'),
+            fuelType: String(fuelTypeVal || 'Diesel'),
+            stationName: String(stationVal || 'Unknown'),
+            stationAddress: String(addressVal || ''),
+            liters: parseNumeric(literVal),
+            costPerLiter: parseNumeric(costVal),
             showCostToClient: true,
           };
         });
@@ -639,7 +750,7 @@ const App: React.FC = () => {
     if (!canManageTransactions) return;
     const formData = new FormData(e.currentTarget);
     const clientId = formData.get('clientId') as string;
-    const fuelCardNumber = formData.get('fuelCardNumber') as string;
+    const fuelCardNumber = (formData.get('fuelCardNumber') as string).trim();
     
     const selectedClient = clients.find(c => c.id === clientId);
     if (clientId !== 'unassigned' && selectedClient && !selectedClient.fuelCardNumbers.includes(fuelCardNumber)) {
@@ -736,10 +847,31 @@ const App: React.FC = () => {
                 {isLoggingIn ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5 text-blue-400" />}
                 {isLoggingIn ? 'Verifying...' : 'Access Dashboard'}
               </button>
+
+              {loginFailedCount > 0 && (
+                <div className="pt-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                   <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex flex-col gap-3">
+                     <p className="text-xs text-red-700 font-bold flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" /> Credentials Hint:
+                     </p>
+                     <p className="text-[10px] text-red-600 font-mono leading-relaxed">
+                        Email: andriy.pelypenko@gmail.com<br/>
+                        Password: qazQAZ123!@#
+                     </p>
+                     <button 
+                       type="button"
+                       onClick={handleResetSystem}
+                       className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500 hover:text-red-600 transition-colors mt-2"
+                     >
+                        <RotateCcw className="w-3 h-3" /> {t.resetSystem}
+                     </button>
+                   </div>
+                </div>
+              )}
            </form>
 
            <div className="pt-6 border-t border-slate-100 flex justify-center items-center">
-             <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">v2.5 Enterprise</p>
+             <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">v2.6 Enterprise</p>
            </div>
         </div>
       </div>
@@ -750,6 +882,7 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-slate-50 overflow-hidden relative">
       <input type="file" ref={clientFileRef} className="hidden" accept=".xlsx,.xls" onChange={handleImportClients} />
       <input type="file" ref={fuelFileRef} className="hidden" accept=".xlsx,.xls" onChange={handleImportFuel} />
+      <input type="file" ref={backupFileRef} className="hidden" accept=".json" onChange={handleImportBackup} />
 
       {showToast && (
         <div className="fixed top-6 right-6 z-[100] animate-in slide-in-from-right duration-300">
@@ -786,16 +919,19 @@ const App: React.FC = () => {
               </p>
               {canManageUsers && (
                 <button onClick={() => setActiveView('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                  <SettingsIcon className="w-5 h-5" />
+                  <UserPlus className="w-5 h-5" />
                   <span className="font-medium">{t.userManagement}</span>
                 </button>
               )}
-              <button 
-                onClick={() => setLang(lang === 'en' ? 'uk' : 'en')} 
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <Languages className="w-5 h-5" />
-                <span className="font-medium">{t.switchLanguage}</span>
+              {user?.role === 'admin' && (
+                <button onClick={() => setActiveView('data')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === 'data' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                  <Database className="w-5 h-5" />
+                  <span className="font-medium">{t.dataManagement}</span>
+                </button>
+              )}
+              <button onClick={() => setActiveView('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <SettingsIcon className="w-5 h-5" />
+                <span className="font-medium">{t.settings}</span>
               </button>
             </div>
           </nav>
@@ -817,19 +953,21 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-y-auto min-w-0">
         <header className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-10 shadow-sm">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <h2 className="text-xl font-bold text-slate-800">{activeView === 'users' ? t.userManagement : (t as any)[activeView]}</h2>
+            <h2 className="text-xl font-bold text-slate-800">{(t as any)[activeView]}</h2>
             
             <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <div className="relative flex-1 md:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input 
-                  type="text" 
-                  placeholder={t.search} 
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 transition-all outline-none"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
+              {activeView !== 'settings' && activeView !== 'data' && (
+                <div className="relative flex-1 md:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input 
+                    type="text" 
+                    placeholder={t.search} 
+                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 transition-all outline-none"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+              )}
 
               {activeView === 'transactions' && (
                 <div className="flex gap-2">
@@ -879,7 +1017,7 @@ const App: React.FC = () => {
           )}
         </header>
 
-        <div className="p-8">
+        <div className="p-8 space-y-8">
           {activeView === 'dashboard' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[
@@ -949,7 +1087,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {activeView === 'users' && canManageUsers && (
+          {activeView === 'users' && (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
               <table className="w-full text-left">
                 <thead className="bg-slate-50 border-b border-slate-200">
@@ -977,13 +1115,93 @@ const App: React.FC = () => {
                       <td className="px-6 py-4 text-right">
                         <div className="flex justify-end gap-2">
                            <button onClick={() => setEditingUser(u)} className="p-2 hover:bg-blue-50 rounded-lg text-slate-400 hover:text-blue-600 transition-colors"><Pencil className="w-4 h-4" /></button>
-                           <button disabled={u.id === user?.id} onClick={() => handleDeleteUser(u.id)} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 disabled:opacity-0 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                           <button disabled={u.id === user?.id || u.id === 'primary-admin'} onClick={() => handleDeleteUser(u.id)} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 disabled:opacity-30 transition-colors"><Trash2 className="w-4 h-4" /></button>
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {activeView === 'settings' && (
+            <div className="max-w-4xl space-y-8">
+              {/* Language Settings */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-blue-50 rounded-2xl"><Languages className="w-6 h-6 text-blue-600" /></div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">{t.languagePref}</h3>
+                    <p className="text-sm text-slate-500 font-medium">Configure your primary dashboard language.</p>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setLang('en')}
+                    className={`flex-1 px-6 py-4 rounded-2xl font-black transition-all border ${lang === 'en' ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-600/20' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                  >
+                    English
+                  </button>
+                  <button 
+                    onClick={() => setLang('uk')}
+                    className={`flex-1 px-6 py-4 rounded-2xl font-black transition-all border ${lang === 'uk' ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-600/20' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                  >
+                    Українська
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeView === 'data' && user?.role === 'admin' && (
+            <div className="max-w-4xl space-y-8">
+              {/* Data Management Section */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-indigo-50 rounded-2xl"><Database className="w-6 h-6 text-indigo-600" /></div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">{t.dataManagement}</h3>
+                    <p className="text-sm text-slate-500 font-medium">{t.backupHint}</p>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button 
+                    onClick={handleExportBackup}
+                    className="flex items-center justify-center gap-3 px-6 py-4 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-600/10 active:scale-95"
+                  >
+                    <Save className="w-5 h-5" />
+                    {t.exportBackup}
+                  </button>
+                  <button 
+                    onClick={() => backupFileRef.current?.click()}
+                    className="flex items-center justify-center gap-3 px-6 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black hover:bg-slate-200 transition-all active:scale-95"
+                  >
+                    <UploadCloud className="w-5 h-5" />
+                    {t.importBackup}
+                  </button>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 flex flex-col gap-4">
+                  <div className="flex items-center justify-between">
+                     <div className="flex items-center gap-2">
+                       <AlertCircle className="w-4 h-4 text-red-500" />
+                       <span className="text-xs font-black text-slate-400 uppercase tracking-widest">{t.systemConfig}</span>
+                     </div>
+                  </div>
+                  <button 
+                    onClick={handleResetSystem}
+                    className="flex items-center justify-between px-6 py-4 bg-red-50 text-red-600 rounded-2xl font-black hover:bg-red-100 transition-all group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <RotateCcw className="w-5 h-5" />
+                      <span>{t.resetSystem}</span>
+                    </div>
+                    <ArrowRight className="w-5 h-5 opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all" />
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

@@ -42,4 +42,4 @@ export interface FuelTransaction {
   showCostToClient: boolean;
 }
 
-export type ViewType = 'dashboard' | 'clients' | 'transactions' | 'users';
+export type ViewType = 'dashboard' | 'clients' | 'transactions' | 'users' | 'settings' | 'data';
