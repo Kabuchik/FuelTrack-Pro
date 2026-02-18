@@ -1,5 +1,5 @@
 {
-  "name": "FuelTrack Pro",
+  "name": "FuelTrack Pro 0.1",
   "description": "A comprehensive fuel purchase tracking and management system for clients, featuring Excel data import, intelligent fuel insights via Gemini AI, and professional PDF invoice generation.",
   "requestFramePermissions": []
 }

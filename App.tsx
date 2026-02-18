@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Users, 
@@ -21,7 +20,7 @@ import {
   LogOut,
   ShieldCheck,
   User as UserIcon,
-  Settings,
+  Settings as SettingsIcon,
   UserPlus,
   Languages,
   AlertCircle,
@@ -32,7 +31,8 @@ import {
   Filter,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Key
 } from 'lucide-react';
 import { ViewType, Client, FuelTransaction, AuthUser, Role, UserPermissions } from './types';
 import * as XLSX from 'xlsx';
@@ -47,6 +47,7 @@ const translations = {
     overview: 'Overview',
     clients: 'Clients',
     transactions: 'Transactions',
+    settings: 'Settings',
     userManagement: 'User Management',
     search: 'Search anything...',
     importClients: 'Import Clients',
@@ -75,7 +76,7 @@ const translations = {
     account: 'Account',
     assetCard: 'Asset Card',
     station: 'Station',
-    stationAddress: 'Station Address',
+    stationAddress: 'Gas Station Address',
     liters: 'Liters',
     invoiceTotal: 'Invoice Total',
     welcome: 'Welcome back',
@@ -132,12 +133,22 @@ const translations = {
     permManageUsers: 'Add/Edit Users',
     permManageTx: 'Edit/Delete Tx',
     permManageClients: 'Edit/Delete Clients',
-    permExport: 'Export Data'
+    permExport: 'Export Data',
+    password: 'Password',
+    setPassword: 'Set Password',
+    invalidLogin: 'Invalid email or password.',
+    switchLanguage: 'Language: English',
+    importSuccess: 'Imported successfully!',
+    importError: 'Import failed. Check file format.',
+    duplicateIdError: 'Error: This Client ID is already in use.',
+    duplicateCardError: 'Error: Card "{card}" is already linked to client "{account}".',
+    duplicateInternalCardError: 'Error: You have entered duplicate card numbers in the list: "{card}".',
   },
   uk: {
     overview: 'Огляд',
     clients: 'Клієнти',
     transactions: 'Транзакції',
+    settings: 'Налаштування',
     userManagement: 'Користувачі',
     search: 'Пошук...',
     importClients: 'Імпорт клієнтів',
@@ -166,7 +177,7 @@ const translations = {
     account: 'Рахунок',
     assetCard: 'Картка',
     station: 'АЗС',
-    stationAddress: 'Адреса',
+    stationAddress: 'Адреса АЗС',
     liters: 'Літри',
     invoiceTotal: 'Всього',
     welcome: 'З поверненням',
@@ -223,7 +234,16 @@ const translations = {
     permManageUsers: 'Додавати користувачів',
     permManageTx: 'Редагувати транзакції',
     permManageClients: 'Редагувати клієнтів',
-    permExport: 'Експорт даних'
+    permExport: 'Експорт даних',
+    password: 'Пароль',
+    setPassword: 'Встановити пароль',
+    invalidLogin: 'Невірний email або пароль.',
+    switchLanguage: 'Мова: Українська',
+    importSuccess: 'Імпорт успішний!',
+    importError: 'Помилка імпорту. Перевірте формат.',
+    duplicateIdError: 'Помилка: Цей ID клієнта вже використовується.',
+    duplicateCardError: 'Помилка: Картка "{card}" вже закріплена за клієнтом "{account}".',
+    duplicateInternalCardError: 'Помилка: Ви ввели дубльовані номери карток у списку: "{card}".',
   }
 };
 
@@ -243,6 +263,8 @@ const App: React.FC = () => {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthUser[]>([]);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const [activeView, setActiveView] = useState<ViewType>('dashboard');
   const [clients, setClients] = useState<Client[]>([]);
@@ -260,12 +282,14 @@ const App: React.FC = () => {
   const [editingUser, setEditingUser] = useState<AuthUser | null>(null);
   
   const [selectedClientId, setSelectedClientId] = useState<string>('all');
-  const [aiInsight, setAiInsight] = useState<string | null>(null);
-  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
-  
-  const [txModalClientId, setTxModalClientId] = useState<string>('');
   const [txError, setTxError] = useState<string | null>(null);
+  const [clientError, setClientError] = useState<string | null>(null);
   const [showToast, setShowToast] = useState<string | null>(null);
+
+  const [modalSelectedClientId, setModalSelectedClientId] = useState<string>('');
+
+  const clientFileRef = useRef<HTMLInputElement>(null);
+  const fuelFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('fueltrack_user');
@@ -273,7 +297,6 @@ const App: React.FC = () => {
     const savedTx = localStorage.getItem('fueltrack_tx');
     const savedAuthUsers = localStorage.getItem('fueltrack_auth_users');
     
-    if (savedUser) setUser(JSON.parse(savedUser));
     if (savedClients) setClients(JSON.parse(savedClients));
     if (savedTx) setTransactions(JSON.parse(savedTx));
     
@@ -284,6 +307,7 @@ const App: React.FC = () => {
         id: 'primary-admin',
         name: 'Andriy Pelypenko',
         email: 'andriy.pelypenko@gmail.com',
+        password: 'qazQAZ123!@#',
         role: 'admin',
         photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=Andriy`,
         permissions: {
@@ -296,6 +320,10 @@ const App: React.FC = () => {
       };
       setAuthorizedUsers([initialAdmin]);
     }
+
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
+    }
   }, []);
 
   useEffect(() => {
@@ -303,17 +331,26 @@ const App: React.FC = () => {
       const currentLatest = authorizedUsers.find(u => u.id === user.id);
       if (currentLatest) {
         localStorage.setItem('fueltrack_user', JSON.stringify(currentLatest));
+      } else {
+        handleLogout();
       }
     } else {
       localStorage.removeItem('fueltrack_user');
     }
   }, [user, authorizedUsers]);
 
+  useEffect(() => {
+    if (editingTransaction) {
+      setModalSelectedClientId(editingTransaction.clientId);
+    } else if (isAddingTransaction) {
+      setModalSelectedClientId(clients[0]?.id || 'unassigned');
+    }
+  }, [editingTransaction, isAddingTransaction, clients]);
+
   useEffect(() => localStorage.setItem('fueltrack_clients', JSON.stringify(clients)), [clients]);
   useEffect(() => localStorage.setItem('fueltrack_tx', JSON.stringify(transactions)), [transactions]);
   useEffect(() => localStorage.setItem('fueltrack_auth_users', JSON.stringify(authorizedUsers)), [authorizedUsers]);
 
-  // Permission Helpers
   const hasPermission = (key: keyof UserPermissions) => {
     if (!user) return false;
     if (user.role === 'admin') return true;
@@ -330,21 +367,24 @@ const App: React.FC = () => {
     e.preventDefault();
     setIsLoggingIn(true);
     setTimeout(() => {
-      const match = authorizedUsers.find(u => u.email.toLowerCase() === loginEmail.toLowerCase());
+      const match = authorizedUsers.find(u => 
+        u.email.toLowerCase() === loginEmail.toLowerCase() && 
+        u.password === loginPassword
+      );
       if (match) {
         setUser(match);
         setShowToast(`${t.welcome}, ${match.name}`);
-        setTimeout(() => setShowToast(null), 5000);
+        setTimeout(() => setShowToast(null), 3000);
       } else {
-        alert(lang === 'en' ? "Email not authorized." : "Email не авторизовано.");
+        alert(t.invalidLogin);
       }
       setIsLoggingIn(false);
-    }, 1000);
+    }, 800);
   };
 
-  // Fixed missing handleLogout function
   const handleLogout = () => {
     setUser(null);
+    setLoginPassword('');
     localStorage.removeItem('fueltrack_user');
   };
 
@@ -355,6 +395,7 @@ const App: React.FC = () => {
     const role = formData.get('role') as Role;
     const name = formData.get('name') as string;
     const email = formData.get('email') as string;
+    const password = formData.get('password') as string;
 
     const perms: UserPermissions = {
       canSeeCost: formData.get('canSeeCost') === 'on',
@@ -365,7 +406,7 @@ const App: React.FC = () => {
     };
 
     if (editingUser) {
-      setAuthorizedUsers(authorizedUsers.map(u => u.id === editingUser.id ? { ...u, name, email, role, permissions: perms } : u));
+      setAuthorizedUsers(authorizedUsers.map(u => u.id === editingUser.id ? { ...u, name, email, role, password, permissions: perms } : u));
       setEditingUser(null);
       setShowToast(t.userUpdated);
     } else {
@@ -373,6 +414,7 @@ const App: React.FC = () => {
         id: crypto.randomUUID(),
         name,
         email,
+        password,
         role,
         permissions: perms,
         photoUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`
@@ -387,6 +429,140 @@ const App: React.FC = () => {
   const handleDeleteUser = (id: string) => {
     if (id === user?.id) return;
     setAuthorizedUsers(authorizedUsers.filter(u => u.id !== id));
+  };
+
+  const handleAddClient = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!canManageClients) return;
+    const formData = new FormData(e.currentTarget);
+    const uniqueId = formData.get('uniqueId') as string;
+    const cardsInput = formData.get('cards') as string;
+    const newCards = cardsInput.split(',').map(c => c.trim()).filter(c => c);
+
+    // 1. Validation for unique Client ID (Internal Ref)
+    const duplicateIdClient = clients.find(c => c.uniqueId === uniqueId && c.id !== editingClient?.id);
+    if (duplicateIdClient) {
+      setClientError(t.duplicateIdError);
+      return;
+    }
+
+    // 2. Validation for unique Asset Cards within the SAME account
+    const uniqueEnteredCards = new Set<string>();
+    for (const card of newCards) {
+      if (uniqueEnteredCards.has(card)) {
+        setClientError(t.duplicateInternalCardError.replace('{card}', card));
+        return;
+      }
+      uniqueEnteredCards.add(card);
+    }
+
+    // 3. Validation for unique Asset Cards across OTHER accounts
+    for (const card of newCards) {
+      const conflictingClient = clients.find(c => c.id !== editingClient?.id && c.fuelCardNumbers.includes(card));
+      if (conflictingClient) {
+        setClientError(t.duplicateCardError.replace('{card}', card).replace('{account}', conflictingClient.name));
+        return;
+      }
+    }
+
+    const newClient: Client = {
+      id: editingClient?.id || crypto.randomUUID(),
+      uniqueId: uniqueId,
+      name: formData.get('name') as string,
+      email: formData.get('email') as string,
+      fuelCardNumbers: newCards,
+      marginPerLiter: parseFloat(formData.get('margin') as string || '0'),
+    };
+    
+    if (editingClient) {
+      setClients(clients.map(c => c.id === editingClient.id ? newClient : c));
+      setEditingClient(null);
+      setShowToast(t.clientUpdated);
+    } else {
+      setClients([...clients, newClient]);
+      setIsAddingClient(false);
+      setShowToast("Client onboarded.");
+    }
+    setClientError(null);
+    setTimeout(() => setShowToast(null), 3000);
+  };
+
+  const handleImportClients = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws) as any[];
+
+        const newClients: Client[] = data.map(row => {
+          const cardsStr = String(row.Cards || row.fuelCardNumbers || row.cards || row['Fuel Cards'] || '');
+          return {
+            id: crypto.randomUUID(),
+            uniqueId: String(row.ID || row.uniqueId || row['Unique ID'] || ''),
+            name: String(row.Name || row.name || row['Client Name'] || ''),
+            email: String(row.Email || row.email || ''),
+            fuelCardNumbers: cardsStr.split(',').map((c: string) => c.trim()).filter(c => c),
+            marginPerLiter: parseFloat(row.Margin || row.margin || row['Margin Per Liter'] || '0'),
+          };
+        });
+
+        setClients([...clients, ...newClients]);
+        setShowToast(t.importSuccess);
+        setTimeout(() => setShowToast(null), 3000);
+      } catch (err) {
+        alert(t.importError);
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
+  };
+
+  const handleImportFuel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws) as any[];
+
+        const newTx: FuelTransaction[] = data.map(row => {
+          const card = String(row.Card || row.fuelCardNumber || row.card || row['Asset Card'] || '');
+          const matchedClient = clients.find(c => c.fuelCardNumbers.includes(card));
+          return {
+            id: crypto.randomUUID(),
+            clientId: matchedClient?.id || 'unassigned',
+            fuelCardNumber: card,
+            date: String(row.Date || row.date || format(new Date(), 'yyyy-MM-dd')),
+            time: String(row.Time || row.time || '12:00'),
+            fuelType: String(row.FuelType || row.fuelType || row['Fuel Type'] || 'Diesel'),
+            stationName: String(row.Station || row.stationName || row['Station Name'] || 'Unknown'),
+            stationAddress: String(row.Address || row.stationAddress || row['Station Address'] || ''),
+            liters: parseFloat(row.Liters || row.liters || '0'),
+            costPerLiter: parseFloat(row.Cost || row.costPerLiter || row['Cost Per Liter'] || '0'),
+            showCostToClient: true,
+          };
+        });
+
+        setTransactions([...transactions, ...newTx]);
+        setShowToast(t.importSuccess);
+        setTimeout(() => setShowToast(null), 3000);
+      } catch (err) {
+        alert(t.importError);
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
   };
 
   const stats = useMemo(() => {
@@ -405,18 +581,34 @@ const App: React.FC = () => {
   const filteredTransactions = useMemo(() => {
     return transactions.filter(tx => {
       const clientMatches = selectedClientId === 'all' || tx.clientId === selectedClientId;
-      const searchMatches = tx.fuelCardNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           tx.stationName.toLowerCase().includes(searchTerm.toLowerCase());
+      const searchMatches = 
+        tx.fuelCardNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        tx.stationName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        tx.stationAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (clients.find(c => c.id === tx.clientId)?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
+      
       let dateMatches = true;
       if (startDate || endDate) {
-        const txDate = parseISO(tx.date);
-        const start = startDate ? parseISO(startDate) : new Date(1970, 0, 1);
-        const end = endDate ? parseISO(endDate) : new Date(2100, 0, 1);
-        dateMatches = isWithinInterval(txDate, { start: startOfDay(start), end: endOfDay(end) });
+        const txDate = startOfDay(parseISO(tx.date));
+        const start = startDate ? startOfDay(parseISO(startDate)) : startOfDay(new Date(1970, 0, 1));
+        const end = endDate ? endOfDay(parseISO(endDate)) : endOfDay(new Date(2100, 0, 1));
+        dateMatches = isWithinInterval(txDate, { start, end });
       }
       return clientMatches && searchMatches && dateMatches;
-    }).sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, selectedClientId, searchTerm, startDate, endDate]);
+    }).sort((a, b) => {
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) return dateCompare;
+      return b.time.localeCompare(a.time);
+    });
+  }, [transactions, selectedClientId, searchTerm, startDate, endDate, clients]);
+
+  const filteredClients = useMemo(() => {
+    return clients.filter(c => 
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.uniqueId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.email.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [clients, searchTerm]);
 
   const handleExportExcel = () => {
     if (!canExport) return;
@@ -425,9 +617,11 @@ const App: React.FC = () => {
       const sellPrice = tx.costPerLiter + (client?.marginPerLiter || 0);
       return {
         'Date': tx.date,
+        'Time': tx.time,
         'Client': client?.name || 'Manual',
         'Card': tx.fuelCardNumber,
         'Station': tx.stationName,
+        'Address': tx.stationAddress,
         'Liters': tx.liters,
         ...(canSeeCost ? { 'Buy Price (UAH)': tx.costPerLiter } : {}),
         'Sell Price (UAH)': sellPrice,
@@ -446,11 +640,13 @@ const App: React.FC = () => {
     const formData = new FormData(e.currentTarget);
     const clientId = formData.get('clientId') as string;
     const fuelCardNumber = formData.get('fuelCardNumber') as string;
+    
     const selectedClient = clients.find(c => c.id === clientId);
-    if (selectedClient && !selectedClient.fuelCardNumbers.includes(fuelCardNumber)) {
+    if (clientId !== 'unassigned' && selectedClient && !selectedClient.fuelCardNumbers.includes(fuelCardNumber)) {
         setTxError(t.invalidCard);
         return;
     }
+
     const txData = {
       clientId,
       fuelCardNumber,
@@ -463,33 +659,25 @@ const App: React.FC = () => {
       costPerLiter: parseFloat(formData.get('costPerLiter') as string),
       showCostToClient: formData.get('showCost') === 'on',
     };
+
     if (editingTransaction) {
       setTransactions(transactions.map(tx => tx.id === editingTransaction.id ? { ...tx, ...txData } : tx));
       setEditingTransaction(null);
+      setShowToast(t.txUpdated);
     } else {
       setTransactions([...transactions, { id: crypto.randomUUID(), ...txData }]);
       setIsAddingTransaction(false);
+      setShowToast("Transaction recorded.");
     }
     setTxError(null);
+    setTimeout(() => setShowToast(null), 3000);
   };
 
-  const handleAddClient = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!canManageClients) return;
-    const formData = new FormData(e.currentTarget);
-    const newClient: Client = {
-      id: crypto.randomUUID(),
-      uniqueId: formData.get('uniqueId') as string,
-      name: formData.get('name') as string,
-      email: formData.get('email') as string,
-      fuelCardNumbers: (formData.get('cards') as string).split(',').map(c => c.trim()),
-      marginPerLiter: parseFloat(formData.get('margin') as string || '0'),
-    };
-    setClients([...clients, newClient]);
-    setIsAddingClient(false);
-  };
+  const currentClientCards = useMemo(() => {
+    const matched = clients.find(c => c.id === modalSelectedClientId);
+    return matched ? matched.fuelCardNumbers : [];
+  }, [modalSelectedClientId, clients]);
 
-  // Logic to handle login/unauthorized state and prevent crashes when user is null
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -500,9 +688,9 @@ const App: React.FC = () => {
               <p className="text-slate-400 text-center font-medium">Enterprise fuel management & analytics dashboard.</p>
            </div>
            
-           <form onSubmit={handleGoogleLogin} className="space-y-6">
+           <form onSubmit={handleGoogleLogin} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-xs font-black uppercase text-slate-400 tracking-widest px-1">Email Authorization</label>
+                <label className="text-xs font-black uppercase text-slate-400 tracking-widest px-1">{t.primaryEmail}</label>
                 <div className="relative">
                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
                    <input 
@@ -515,20 +703,42 @@ const App: React.FC = () => {
                    />
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-black uppercase text-slate-400 tracking-widest px-1">{t.password}</label>
+                <div className="relative">
+                   <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
+                   <input 
+                     type={showPassword ? "text" : "password"} 
+                     required 
+                     minLength={1}
+                     maxLength={100}
+                     value={loginPassword}
+                     onChange={(e) => setLoginPassword(e.target.value)}
+                     className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-12 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none font-bold text-slate-700"
+                     placeholder="••••••••"
+                   />
+                   <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                   >
+                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                   </button>
+                </div>
+              </div>
+
               <button 
                 type="submit" 
                 disabled={isLoggingIn}
-                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/20 flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/20 flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 mt-4"
               >
                 {isLoggingIn ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5 text-blue-400" />}
                 {isLoggingIn ? 'Verifying...' : 'Access Dashboard'}
               </button>
            </form>
 
-           <div className="pt-6 border-t border-slate-100 flex justify-between items-center">
-             <button onClick={() => setLang(lang === 'en' ? 'uk' : 'en')} className="flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest transition-colors">
-                <Languages className="w-4 h-4" /> {lang === 'en' ? 'UKRAINIAN' : 'ENGLISH'}
-             </button>
+           <div className="pt-6 border-t border-slate-100 flex justify-center items-center">
              <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">v2.5 Enterprise</p>
            </div>
         </div>
@@ -538,6 +748,9 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden relative">
+      <input type="file" ref={clientFileRef} className="hidden" accept=".xlsx,.xls" onChange={handleImportClients} />
+      <input type="file" ref={fuelFileRef} className="hidden" accept=".xlsx,.xls" onChange={handleImportFuel} />
+
       {showToast && (
         <div className="fixed top-6 right-6 z-[100] animate-in slide-in-from-right duration-300">
            <div className="bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border border-slate-700">
@@ -548,31 +761,46 @@ const App: React.FC = () => {
       )}
 
       <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0">
-        <div className="p-6">
+        <div className="p-6 overflow-y-auto grow">
           <div className="flex items-center gap-2 mb-8">
             <div className="bg-blue-600 p-2 rounded-lg"><Fuel className="w-6 h-6" /></div>
             <h1 className="text-xl font-bold tracking-tight">FuelTrack Pro</h1>
           </div>
-          <nav className="space-y-2">
-            {[
-              { id: 'dashboard', icon: LayoutDashboard, label: t.overview },
-              { id: 'clients', icon: Users, label: t.clients },
-              { id: 'transactions', icon: FileText, label: t.transactions },
-            ].map((item) => (
-              <button key={item.id} onClick={() => setActiveView(item.id as ViewType)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === item.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <item.icon className="w-5 h-5" />
-                <span className="font-medium">{item.label}</span>
+          <nav className="space-y-6">
+            <div className="space-y-2">
+              {[
+                { id: 'dashboard', icon: LayoutDashboard, label: t.overview },
+                { id: 'clients', icon: Users, label: t.clients },
+                { id: 'transactions', icon: FileText, label: t.transactions },
+              ].map((item) => (
+                <button key={item.id} onClick={() => setActiveView(item.id as ViewType)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === item.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                  <item.icon className="w-5 h-5" />
+                  <span className="font-medium">{item.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              <p className="px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                {t.settings}
+              </p>
+              {canManageUsers && (
+                <button onClick={() => setActiveView('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                  <SettingsIcon className="w-5 h-5" />
+                  <span className="font-medium">{t.userManagement}</span>
+                </button>
+              )}
+              <button 
+                onClick={() => setLang(lang === 'en' ? 'uk' : 'en')} 
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <Languages className="w-5 h-5" />
+                <span className="font-medium">{t.switchLanguage}</span>
               </button>
-            ))}
-            {canManageUsers && (
-               <button onClick={() => setActiveView('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeView === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <Settings className="w-5 h-5" />
-                <span className="font-medium">{t.userManagement}</span>
-              </button>
-            )}
+            </div>
           </nav>
         </div>
-        <div className="mt-auto p-4 border-t border-slate-800 space-y-4">
+        <div className="mt-auto p-4 border-t border-slate-800 space-y-4 shrink-0">
            <div className="flex items-center gap-3 px-2">
              <img src={user.photoUrl} className="w-10 h-10 rounded-full border-2 border-slate-700" alt="Avatar" />
              <div className="flex flex-col min-w-0">
@@ -580,53 +808,72 @@ const App: React.FC = () => {
                <span className="text-[10px] font-extrabold uppercase tracking-widest text-blue-400">{user.role}</span>
              </div>
            </div>
-           <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors text-sm">
+           <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors text-sm font-bold">
              <LogOut className="w-4 h-4" />{t.logout}
            </button>
         </div>
       </aside>
 
       <main className="flex-1 overflow-y-auto min-w-0">
-        <header className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-10">
-          <div className="flex justify-between items-center mb-4">
+        <header className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-10 shadow-sm">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <h2 className="text-xl font-bold text-slate-800">{activeView === 'users' ? t.userManagement : (t as any)[activeView]}</h2>
-            <div className="flex items-center gap-3">
+            
+            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+              <div className="relative flex-1 md:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder={t.search} 
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 transition-all outline-none"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+
               {activeView === 'transactions' && (
                 <div className="flex gap-2">
                   {canExport && (
                     <>
-                      <button onClick={handleExportExcel} className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg border border-emerald-200 text-sm font-bold flex items-center gap-2"><FileSpreadsheet className="w-4 h-4" /> {t.exportExcel}</button>
-                      <button onClick={() => downloadConsolidatedInvoice(filteredTransactions, clients)} className="bg-indigo-50 text-indigo-700 px-4 py-2 rounded-lg border border-indigo-200 text-sm font-bold flex items-center gap-2"><Download className="w-4 h-4" /> {t.exportInvoice}</button>
+                      <button onClick={handleExportExcel} className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg border border-emerald-200 text-sm font-bold flex items-center gap-2 hover:bg-emerald-100 transition-colors"><FileSpreadsheet className="w-4 h-4" /> {t.exportExcel}</button>
+                      <button onClick={() => downloadConsolidatedInvoice(filteredTransactions, clients)} className="bg-indigo-50 text-indigo-700 px-4 py-2 rounded-lg border border-indigo-200 text-sm font-bold flex items-center gap-2 hover:bg-indigo-100 transition-colors"><Download className="w-4 h-4" /> {t.exportInvoice}</button>
                     </>
                   )}
                   {canManageTransactions && (
-                    <button onClick={() => setIsAddingTransaction(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20"><Plus className="w-4 h-4" /> {t.recordFuel}</button>
+                    <>
+                      <button onClick={() => fuelFileRef.current?.click()} className="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-200 transition-colors"><Upload className="w-4 h-4" /> {t.importFuel}</button>
+                      <button onClick={() => setIsAddingTransaction(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-colors"><Plus className="w-4 h-4" /> {t.recordFuel}</button>
+                    </>
                   )}
                 </div>
               )}
               {activeView === 'clients' && canManageClients && (
-                <button onClick={() => setIsAddingClient(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20"><Plus className="w-4 h-4" /> {t.newClient}</button>
+                <div className="flex gap-2">
+                  <button onClick={() => clientFileRef.current?.click()} className="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-200 transition-colors"><Upload className="w-4 h-4" /> {t.importClients}</button>
+                  <button onClick={() => setIsAddingClient(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-colors"><Plus className="w-4 h-4" /> {t.newClient}</button>
+                </div>
               )}
               {activeView === 'users' && canManageUsers && (
-                <button onClick={() => setIsAddingUser(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20"><UserPlus className="w-4 h-4" /> {t.newUser}</button>
+                <button onClick={() => setIsAddingUser(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-colors"><UserPlus className="w-4 h-4" /> {t.newUser}</button>
               )}
             </div>
           </div>
 
           {activeView === 'transactions' && (
-            <div className="flex flex-wrap gap-4 items-center bg-slate-50 p-4 rounded-xl">
+            <div className="flex flex-wrap gap-4 items-center bg-slate-50 p-4 rounded-xl mt-4 border border-slate-100">
                <div className="flex items-center gap-2">
-                 <span className="text-xs font-black text-slate-400 uppercase">{t.account}</span>
-                 <select className="bg-white border rounded px-2 py-1 text-sm font-bold" value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)}>
+                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t.account}</span>
+                 <select className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none" value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)}>
                     <option value="all">{t.allClients}</option>
                     {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                  </select>
                </div>
                <div className="flex items-center gap-2">
                  <Calendar className="w-4 h-4 text-slate-400" />
-                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white border rounded px-2 py-1 text-sm" />
-                 <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white border rounded px-2 py-1 text-sm" />
-                 {(startDate || endDate) && <button onClick={() => { setStartDate(''); setEndDate(''); }} className="text-red-500"><XCircle className="w-4 h-4" /></button>}
+                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 outline-none" />
+                 <span className="text-slate-300">→</span>
+                 <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 outline-none" />
+                 {(startDate || endDate) && <button onClick={() => { setStartDate(''); setEndDate(''); }} className="p-1 hover:bg-red-50 text-red-500 rounded-full transition-colors"><XCircle className="w-4 h-4" /></button>}
                </div>
             </div>
           )}
@@ -640,14 +887,65 @@ const App: React.FC = () => {
                 { label: t.revenue, value: stats.totalRevenue.toLocaleString() + ' ' + t.currency, icon: TrendingUp, color: 'text-emerald-600' },
                 { label: t.margin, value: stats.totalMargin.toLocaleString() + ' ' + t.currency, icon: CreditCard, color: 'text-amber-600' },
               ].map((s, i) => (
-                <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+                <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow">
                   <div className={`p-4 rounded-xl bg-slate-50`}><s.icon className={`w-6 h-6 ${s.color}`} /></div>
                   <div>
-                    <p className="text-xs text-slate-400 font-extrabold uppercase">{s.label}</p>
+                    <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest">{s.label}</p>
                     <p className="text-2xl font-black text-slate-800">{s.value}</p>
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {activeView === 'clients' && (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">{t.idRef}</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">{t.identity}</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">{t.activeCards}</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">{t.marginL}</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">{t.actions}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredClients.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium">{t.noClients}</td>
+                    </tr>
+                  ) : (
+                    filteredClients.map(client => (
+                      <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 font-black text-slate-500 text-xs">{client.uniqueId}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-slate-900">{client.name}</span>
+                            <span className="text-xs text-slate-400">{client.email}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-wrap gap-1">
+                            {client.fuelCardNumbers.map(card => (
+                              <span key={card} className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-[10px] font-bold border border-blue-100">{card}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right font-black text-emerald-600">{client.marginPerLiter.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-right">
+                          {canManageClients && (
+                            <div className="flex justify-end gap-2">
+                               <button onClick={() => setEditingClient(client)} className="p-2 hover:bg-blue-50 rounded-lg text-slate-400 hover:text-blue-600 transition-colors"><Pencil className="w-4 h-4" /></button>
+                               <button onClick={() => setClients(clients.filter(c => c.id !== client.id))} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -656,19 +954,19 @@ const App: React.FC = () => {
               <table className="w-full text-left">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase">Member</th>
-                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase">Role</th>
-                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-right">Actions</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">Member</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">Role</th>
+                    <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody className="divide-y divide-slate-100">
                   {authorizedUsers.map(u => (
-                    <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <img src={u.photoUrl} className="w-8 h-8 rounded-full" alt="" />
+                          <img src={u.photoUrl} className="w-8 h-8 rounded-full border border-slate-200" alt="" />
                           <div className="flex flex-col">
-                            <span className="text-sm font-bold">{u.name}</span>
+                            <span className="text-sm font-bold text-slate-900">{u.name}</span>
                             <span className="text-xs text-slate-400">{u.email}</span>
                           </div>
                         </div>
@@ -678,8 +976,8 @@ const App: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex justify-end gap-2">
-                           <button onClick={() => setEditingUser(u)} className="p-2 hover:bg-blue-50 rounded text-slate-400 hover:text-blue-600"><Pencil className="w-4 h-4" /></button>
-                           <button disabled={u.id === user?.id} onClick={() => handleDeleteUser(u.id)} className="p-2 hover:bg-red-50 rounded text-slate-400 hover:text-red-600 disabled:opacity-0"><Trash2 className="w-4 h-4" /></button>
+                           <button onClick={() => setEditingUser(u)} className="p-2 hover:bg-blue-50 rounded-lg text-slate-400 hover:text-blue-600 transition-colors"><Pencil className="w-4 h-4" /></button>
+                           <button disabled={u.id === user?.id} onClick={() => handleDeleteUser(u.id)} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 disabled:opacity-0 transition-colors"><Trash2 className="w-4 h-4" /></button>
                         </div>
                       </td>
                     </tr>
@@ -694,38 +992,49 @@ const App: React.FC = () => {
                <table className="w-full text-left min-w-[1000px]">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase">Log</th>
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase">Account</th>
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-center">Liters</th>
-                      {canSeeCost && <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-right">Buy</th>}
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-right">Sell</th>
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-right">Total</th>
-                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase text-right">Actions</th>
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">Log</th>
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">Account</th>
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-center">Liters</th>
+                      {canSeeCost && <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Buy</th>}
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Sell</th>
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Total</th>
+                      <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
-                    {filteredTransactions.map(tx => {
-                      const client = clients.find(c => c.id === tx.clientId);
-                      const sellPrice = tx.costPerLiter + (client?.marginPerLiter || 0);
-                      return (
-                        <tr key={tx.id} className="hover:bg-slate-50">
-                          <td className="px-6 py-4 text-xs font-bold">{tx.date} <br/> <span className="text-slate-400 font-medium">{tx.time}</span></td>
-                          <td className="px-6 py-4 text-sm font-bold text-blue-600">{client?.name || 'Manual'}</td>
-                          <td className="px-6 py-4 text-center font-black">{tx.liters.toFixed(2)}</td>
-                          {canSeeCost && <td className="px-6 py-4 text-right text-xs text-slate-400">{tx.costPerLiter.toFixed(2)}</td>}
-                          <td className="px-6 py-4 text-right text-sm font-bold text-emerald-600">{sellPrice.toFixed(2)}</td>
-                          <td className="px-6 py-4 text-right font-black">{(tx.liters * sellPrice).toFixed(2)}</td>
-                          <td className="px-6 py-4 text-right">
-                             {canManageTransactions && (
-                               <div className="flex justify-end gap-1">
-                                 <button onClick={() => setEditingTransaction(tx)} className="p-1.5 hover:bg-slate-100 rounded text-slate-400"><Pencil className="w-4 h-4" /></button>
-                                 <button onClick={() => setTransactions(transactions.filter(t => t.id !== tx.id))} className="p-1.5 hover:bg-red-50 rounded text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
-                               </div>
-                             )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredTransactions.length === 0 ? (
+                      <tr>
+                        <td colSpan={canSeeCost ? 7 : 6} className="px-6 py-12 text-center text-slate-400 font-medium">No transactions match filters</td>
+                      </tr>
+                    ) : (
+                      filteredTransactions.map(tx => {
+                        const client = clients.find(c => c.id === tx.clientId);
+                        const sellPrice = tx.costPerLiter + (client?.marginPerLiter || 0);
+                        return (
+                          <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-6 py-4 text-xs font-bold">{tx.date} <br/> <span className="text-slate-400 font-medium">{tx.time}</span></td>
+                            <td className="px-6 py-4">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold text-blue-600">{client?.name || 'Manual'}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">{tx.fuelCardNumber}</span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-center font-black">{tx.liters.toFixed(2)}</td>
+                            {canSeeCost && <td className="px-6 py-4 text-right text-xs text-slate-400">{tx.costPerLiter.toFixed(2)}</td>}
+                            <td className="px-6 py-4 text-right text-sm font-bold text-emerald-600">{sellPrice.toFixed(2)}</td>
+                            <td className="px-6 py-4 text-right font-black">{(tx.liters * sellPrice).toFixed(2)}</td>
+                            <td className="px-6 py-4 text-right">
+                               {canManageTransactions && (
+                                 <div className="flex justify-end gap-1">
+                                   <button onClick={() => setEditingTransaction(tx)} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 transition-colors"><Pencil className="w-4 h-4" /></button>
+                                   <button onClick={() => setTransactions(transactions.filter(t => t.id !== tx.id))} className="p-1.5 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                                 </div>
+                               )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                </table>
             </div>
@@ -733,133 +1042,164 @@ const App: React.FC = () => {
         </div>
       </main>
 
+      {/* Client Add/Edit Modal */}
+      {(isAddingClient || editingClient) && canManageClients && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 space-y-6 animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center">
+              <h3 className="text-2xl font-black">{editingClient ? t.editClient : t.newClient}</h3>
+              <button onClick={() => { setIsAddingClient(false); setEditingClient(null); setClientError(null); }} className="text-slate-400 text-2xl hover:text-slate-600 transition-colors">&times;</button>
+            </div>
+            {clientError && <div className="bg-red-50 text-red-700 p-3 rounded-xl flex items-center gap-2 text-sm font-bold border border-red-100 animate-in shake duration-300"><AlertCircle className="w-4 h-4"/>{clientError}</div>}
+            <form onSubmit={handleAddClient} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.internalId}</label>
+                  <input name="uniqueId" required defaultValue={editingClient?.uniqueId} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.marginL}</label>
+                  <input name="margin" type="number" step="0.01" defaultValue={editingClient?.marginPerLiter} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.accountName}</label>
+                <input name="name" required defaultValue={editingClient?.name} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.primaryEmail}</label>
+                <input name="email" type="email" required defaultValue={editingClient?.email} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.cards}</label>
+                <textarea name="cards" required defaultValue={editingClient?.fuelCardNumbers.join(', ')} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl min-h-[80px] focus:ring-2 focus:ring-blue-500 outline-none" placeholder="CARD-1, CARD-2"></textarea>
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black mt-4 hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">{editingClient ? t.saveChanges : t.authorize}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* User Add/Edit Modal */}
       {(isAddingUser || editingUser) && canManageUsers && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 space-y-6">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 space-y-6 animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center">
               <h3 className="text-2xl font-black">{editingUser ? t.editUser : t.newUser}</h3>
-              <button onClick={() => { setIsAddingUser(false); setEditingUser(null); }} className="text-slate-400 text-2xl">&times;</button>
+              <button onClick={() => { setIsAddingUser(false); setEditingUser(null); }} className="text-slate-400 text-2xl hover:text-slate-600 transition-colors">&times;</button>
             </div>
             <form onSubmit={handleSaveUser} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.fullName}</label>
-                <input required name="name" defaultValue={editingUser?.name} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.fullName}</label>
+                <input required name="name" defaultValue={editingUser?.name} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.primaryEmail}</label>
-                <input required name="email" type="email" defaultValue={editingUser?.email} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.primaryEmail}</label>
+                <input required name="email" type="email" defaultValue={editingUser?.email} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.role}</label>
-                <select name="role" defaultValue={editingUser?.role || 'user'} className="w-full px-4 py-2 bg-slate-50 border rounded-xl">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.setPassword}</label>
+                <input required name="password" type="text" minLength={1} maxLength={100} defaultValue={editingUser?.password} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.role}</label>
+                <select name="role" defaultValue={editingUser?.role || 'user'} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold">
                   <option value="user">{t.staff}</option>
                   <option value="admin">{t.admin}</option>
                 </select>
               </div>
-              <div className="pt-2 border-t space-y-3">
-                 <p className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-2"><Lock className="w-3 h-3" /> {t.permissions}</p>
-                 {[
-                   { id: 'canSeeCost', label: t.permSeeCost },
-                   { id: 'canManageUsers', label: t.permManageUsers },
-                   { id: 'canManageTransactions', label: t.permManageTx },
-                   { id: 'canManageClients', label: t.permManageClients },
-                   { id: 'canExport', label: t.permExport },
-                 ].map(p => (
-                   <label key={p.id} className="flex items-center gap-3 cursor-pointer group">
-                     <input type="checkbox" name={p.id} defaultChecked={editingUser ? (editingUser.permissions as any)[p.id] : false} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                     <span className="text-sm font-bold text-slate-600 group-hover:text-slate-900">{p.label}</span>
-                   </label>
-                 ))}
+              <div className="pt-2 border-t border-slate-100 space-y-3">
+                 <p className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-2 tracking-widest"><Lock className="w-3 h-3" /> {t.permissions}</p>
+                 <div className="grid grid-cols-2 gap-2">
+                   {[
+                     { id: 'canSeeCost', label: t.permSeeCost },
+                     { id: 'canManageUsers', label: t.permManageUsers },
+                     { id: 'canManageTransactions', label: t.permManageTx },
+                     { id: 'canManageClients', label: t.permManageClients },
+                     { id: 'canExport', label: t.permExport },
+                   ].map(p => (
+                     <label key={p.id} className="flex items-center gap-3 cursor-pointer group p-2 hover:bg-slate-50 rounded-lg transition-colors">
+                       <input type="checkbox" name={p.id} defaultChecked={editingUser ? (editingUser.permissions as any)[p.id] : false} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                       <span className="text-xs font-bold text-slate-600 group-hover:text-slate-900">{p.label}</span>
+                     </label>
+                   ))}
+                 </div>
               </div>
-              <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black mt-4">{editingUser ? t.saveChanges : t.confirmInvite}</button>
+              <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black mt-4 hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">{editingUser ? t.saveChanges : t.confirmInvite}</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Basic Transaction Modal */}
+      {/* Transaction Modal (Log Fuel Purchase) */}
       {(isAddingTransaction || editingTransaction) && canManageTransactions && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl p-8 space-y-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl p-8 space-y-6 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center">
               <h3 className="text-2xl font-black">{editingTransaction ? t.editTransaction : t.logFuel}</h3>
-              <button onClick={() => { setIsAddingTransaction(false); setEditingTransaction(null); }} className="text-slate-400 text-2xl">&times;</button>
+              <button onClick={() => { setIsAddingTransaction(false); setEditingTransaction(null); setTxError(null); }} className="text-slate-400 text-2xl hover:text-slate-600 transition-colors">&times;</button>
             </div>
-            {txError && <div className="bg-red-50 text-red-700 p-3 rounded-xl flex items-center gap-2 text-sm font-bold"><AlertCircle className="w-4 h-4"/>{txError}</div>}
+            {txError && <div className="bg-red-50 text-red-700 p-3 rounded-xl flex items-center gap-2 text-sm font-bold border border-red-100"><AlertCircle className="w-4 h-4"/>{txError}</div>}
             <form onSubmit={handleSaveTransaction} className="grid grid-cols-2 gap-4">
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Account</label>
-                <select name="clientId" required className="w-full px-4 py-2 bg-slate-50 border rounded-xl" defaultValue={editingTransaction?.clientId}>
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.account}</label>
+                <select 
+                  name="clientId" 
+                  required 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" 
+                  value={modalSelectedClientId}
+                  onChange={(e) => setModalSelectedClientId(e.target.value)}
+                >
+                  <option value="unassigned">Unassigned</option>
                   {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Card</label>
-                <input name="fuelCardNumber" required defaultValue={editingTransaction?.fuelCardNumber} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.assetCard}</label>
+                <select 
+                  name="fuelCardNumber" 
+                  required 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold"
+                  defaultValue={editingTransaction?.fuelCardNumber}
+                >
+                  <option value="">Select Card</option>
+                  {currentClientCards.map(card => (
+                    <option key={card} value={card}>{card}</option>
+                  ))}
+                  {modalSelectedClientId === 'unassigned' && (
+                    <option value="MANUAL">Manual Card</option>
+                  )}
+                </select>
               </div>
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Date</label>
-                <input type="date" name="date" required defaultValue={editingTransaction?.date || format(new Date(), 'yyyy-MM-dd')} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.date}</label>
+                <input type="date" name="date" required defaultValue={editingTransaction?.date || format(new Date(), 'yyyy-MM-dd')} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Time</label>
-                <input name="time" required defaultValue={editingTransaction?.time || format(new Date(), 'HH:mm')} placeholder="HH:MM" className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
-              </div>
-              <div className="col-span-2 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Station Name</label>
-                <input name="stationName" required defaultValue={editingTransaction?.stationName} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.time}</label>
+                <input name="time" required defaultValue={editingTransaction?.time || format(new Date(), 'HH:mm')} placeholder="HH:MM" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Liters</label>
-                <input type="number" step="0.01" name="liters" required defaultValue={editingTransaction?.liters} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.stationEntity}</label>
+                <input name="stationName" required defaultValue={editingTransaction?.stationName} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="col-span-1 space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">Cost/L</label>
-                <input type="number" step="0.01" name="costPerLiter" required defaultValue={editingTransaction?.costPerLiter} className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.stationAddress}</label>
+                <input name="stationAddress" required defaultValue={editingTransaction?.stationAddress} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+              </div>
+              <div className="col-span-1 space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.liters}</label>
+                <input type="number" step="0.01" name="liters" required defaultValue={editingTransaction?.liters} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
+              </div>
+              <div className="col-span-1 space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{t.purchaseCost}</label>
+                <input type="number" step="0.01" name="costPerLiter" required defaultValue={editingTransaction?.costPerLiter} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" />
               </div>
               <div className="col-span-2 flex items-center gap-2 pt-2">
-                <input type="checkbox" name="showCost" id="showCost" defaultChecked={editingTransaction?.showCostToClient ?? true} />
-                <label htmlFor="showCost" className="text-sm font-bold text-slate-600">{t.showCost}</label>
+                <input type="checkbox" name="showCost" id="showCost" defaultChecked={editingTransaction?.showCostToClient ?? true} className="w-4 h-4 rounded border-slate-300 text-blue-600" />
+                <label htmlFor="showCost" className="text-xs font-bold text-slate-600">{t.showCost}</label>
               </div>
-              <button type="submit" className="col-span-2 bg-blue-600 text-white py-3 rounded-2xl font-black mt-4">{t.commit}</button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Client Modal */}
-      {isAddingClient && canManageClients && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 space-y-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-2xl font-black">{t.newClient}</h3>
-              <button onClick={() => setIsAddingClient(false)} className="text-slate-400 text-2xl">&times;</button>
-            </div>
-            <form onSubmit={handleAddClient} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400">{t.internalId}</label>
-                  <input name="uniqueId" required className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400">{t.marginL}</label>
-                  <input name="margin" type="number" step="0.01" className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.accountName}</label>
-                <input name="name" required className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.primaryEmail}</label>
-                <input name="email" type="email" required className="w-full px-4 py-2 bg-slate-50 border rounded-xl" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-400">{t.cards}</label>
-                <textarea name="cards" required className="w-full px-4 py-2 bg-slate-50 border rounded-xl min-h-[80px]" placeholder="CARD-1, CARD-2"></textarea>
-              </div>
-              <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black mt-4">{t.authorize}</button>
+              <button type="submit" className="col-span-2 bg-blue-600 text-white py-3 rounded-2xl font-black mt-4 hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">{t.commit}</button>
             </form>
           </div>
         </div>
